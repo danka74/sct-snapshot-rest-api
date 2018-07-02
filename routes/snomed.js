@@ -235,6 +235,12 @@ router.get('/:db/:collection/descriptions/:sctid?', function(req, res) {
     var statusFilter;
     var returnLimit = 100;
     var skipTo = 0;
+    var collation = "en_US";
+
+    if (req.query["collation"]) {
+        collation = req.query["collation"];
+    }
+
     if (req.params.sctid) {
         idParamStr = req.params.sctid;
         query = { "descriptionId": idParamStr };
@@ -242,7 +248,7 @@ router.get('/:db/:collection/descriptions/:sctid?', function(req, res) {
         if (req.query["query"]) {
             if (!req.query["statusFilter"]) {
                 statusFilter = 'activeOnly';
-            } else {
+            } else {    
                 statusFilter = req.query["statusFilter"];
             }
             //console.log("statusFilter " + statusFilter);
@@ -262,12 +268,17 @@ router.get('/:db/:collection/descriptions/:sctid?', function(req, res) {
                 words.forEach(function(word) {
                     if (req.query["normalize"] && req.query["normalize"] == "true") {
                         var expWord = "^" + removeDiacritics(regExpEscape(word).toLowerCase()) + ".*";
+                        query.$and.push({ "words": { "$regex": expWord } });
                         //console.log("Normalizing");
                     } else {
                         //console.log("Not normalizing");
-                        var expWord = "^" + regExpEscape(word).toLowerCase() + ".*";
+                        //var expWord = "^" + regExpEscape(word).toLowerCase() + ".*";
+                        var wordQuery = {};
+                        addStartsWithQuery(wordQuery, "words", word, collation);
+                        query.$and.push(wordQuery);
                     }
-                    query.$and.push({ "words": { "$regex": expWord } });
+                    //query.$and.push({ "words": { "$regex": expWord } });
+                    
                 });
             } else if (req.query["searchMode"] == "fullText") {
                 //{ $text: { $search: <string>, $language: <string> } }
@@ -343,7 +354,13 @@ router.get('/:db/:collection/descriptions/:sctid?', function(req, res) {
             options[o] = JSON.parse(req.query[o]);
         }
     }
+    if (req.query["collation"]) {
+        options["collation"] = { locale: collation };
+    }
+
     options["limit"] = 10000000;
+
+    console.log(options);
 
     if (searchMode == "regex" || searchMode == "partialMatching" || searchMode == "fullText") {
         snomedLib.searchDescription(req.params.db, req.params.collection, filters, query, options, function(err, docs) {
@@ -505,6 +522,37 @@ var regExpEscape = function(s) {
     return String(s).replace(/([-()\[\]{}+?*.$\^|,:#<!\\])/g, '\\$1').
     replace(/\x08/g, '\\x08');
 };
+
+// https://jira.mongodb.org/browse/SERVER-29865
+
+var getEndStr = function(str, locale) {
+	var endStrArr = str.toLocaleLowerCase(locale).split("");
+	for (var i = endStrArr.length - 1; i >= 0; --i) {
+		var lastChar = endStrArr[i];
+		var nextChar  = String.fromCharCode(lastChar.charCodeAt(0) + 1);
+		if(nextChar === ":")
+			nextChar = "a";
+		console.log("NEXT ", nextChar);
+		if (nextChar !== false) {
+			endStrArr[i] = nextChar;
+			return endStrArr.join("");
+		}
+		endStrArr.pop();
+	}
+}
+
+var addStartsWithQuery = function (searchCriteria, propertyName, str, locale) {
+	if (!(typeof str === 'string') || !str.length)
+		return;
+	var endStr = getEndStr(str, locale);
+	if (endStr) {
+		searchCriteria[propertyName] = { $elemMatch: { $gte: str, $lt: endStr } };
+	} else {
+		searchCriteria[propertyName] = {
+			$gte: str
+		}
+	}
+}
 
 var getTime = function() {
     var currentdate = new Date();
